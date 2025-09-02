@@ -35,6 +35,17 @@ class GMMModel(torch.nn.Module):
         log.info(
             f"Number of network parameters: {sum(p.numel() for p in self.parameters())}"
         )
+        
+        # Compile the network for RTX 5090 optimization  
+        compile_enabled = kwargs.get("torch_compile", True)  # Default to enabled
+        if compile_enabled:
+            try:
+                self.network = torch.compile(self.network, mode="reduce-overhead")
+                logging.info("Successfully compiled GMM network with torch.compile")
+            except Exception as e:
+                logging.warning(f"Failed to compile network, continuing without compilation: {e}")
+        else:
+            logging.info("torch.compile disabled via configuration")
         self.horizon_steps = horizon_steps
 
     def loss(

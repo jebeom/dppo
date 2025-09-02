@@ -77,6 +77,8 @@ all = [
 Homepage = "https://diffusion-ppo.github.io/"
 
 [tool.setuptools.packages.find]
+where = ["."]
+include = ["dppo*"]
 exclude = []
 
 [tool.wheel]

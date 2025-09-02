@@ -45,7 +45,9 @@ class DiffusionEval(DiffusionModel):
                 if "actor." in key
             }
             use_ft = True
-            self.actor.load_state_dict(base_weights, strict=True)
+            # Handle torch.compile wrapping (OptimizedModule) by unwrapping to _orig_mod
+            actor_target = self.actor._orig_mod if hasattr(self.actor, "_orig_mod") else self.actor
+            actor_target.load_state_dict(base_weights, strict=True)
         except Exception:
             assert ft_denoising_steps == 0, (
                 "If no base policy weights are found, ft_denoising_steps must be 0"
@@ -58,7 +60,8 @@ class DiffusionEval(DiffusionModel):
             }
             use_ft = False
             logging.info("Actor weights not found. Using pre-trained weights!")
-            self.actor.load_state_dict(base_weights, strict=True)
+            actor_target = self.actor._orig_mod if hasattr(self.actor, "_orig_mod") else self.actor
+            actor_target.load_state_dict(base_weights, strict=True)
         logging.info("Loaded base policy weights from %s", network_path)
 
         # Always set up fine-tuned model
@@ -69,7 +72,10 @@ class DiffusionEval(DiffusionModel):
                 for key in checkpoint["model"]
                 if "actor_ft." in key
             }
-            self.actor_ft.load_state_dict(ft_weights, strict=True)
+            actor_ft_target = (
+                self.actor_ft._orig_mod if hasattr(self.actor_ft, "_orig_mod") else self.actor_ft
+            )
+            actor_ft_target.load_state_dict(ft_weights, strict=True)
             logging.info("Loaded fine-tuned policy weights from %s", network_path)
         self.use_guidance = False
 
@@ -143,4 +149,74 @@ class DiffusionEval(DiffusionModel):
             )
             logvar = extract(self.ddpm_logvar_clipped, t, x.shape)
         return mu, logvar
+
+    def decode(self, cond: dict, steps: int = None, deterministic: bool = True):
+        """
+        Differentiable decoding of actions given condition and optional initial noise.
+
+        Args:
+            cond: dict containing at least key "state" of shape (B, To, Do).
+                  Optionally include key "noise_action" of shape (B, Ta, Da) to specify
+                  the initial latent x_T. If not provided, raises an error since this
+                  class is used with controllable noise.
+            steps: number of denoising steps to unroll. If None, uses the model's
+                   configured number of steps (DDIM if enabled, otherwise DDPM).
+            deterministic: if True and using DDIM, use eta=0 (already precomputed) and
+                           no additional noise (fully deterministic trajectory).
+
+        Returns:
+            Tensor of shape (B, Ta, Da): the decoded action chunk.
+        """
+        device = self.betas.device
+        sample_data = cond["state"] if "state" in cond else cond["rgb"]
+        batch_size = len(sample_data)
+
+        # Initial latent x_T must be provided for controllable noise steering
+        if "noise_action" not in cond:
+            raise ValueError("cond must include 'noise_action' for controllable decoding")
+        x = cond["noise_action"].to(device)
+
+        # Determine timestep schedule
+        if self.use_ddim:
+            t_all = self.ddim_t
+        else:
+            t_all = list(reversed(range(self.denoising_steps)))
+        if steps is not None:
+            # Take the first `steps` elements of the schedule
+            # (the schedule is already ordered from T-1 -> 0)
+            t_all = t_all[: int(steps)]
+
+        # Unroll steps with gradients
+        for i, t in enumerate(t_all):
+            t_b = make_timesteps(batch_size, t, device)
+            index_b = make_timesteps(batch_size, i, device)
+            mean, logvar = self.p_mean_var(
+                x=x,
+                t=t_b,
+                cond=cond,
+                index=index_b,
+                deterministic=deterministic,
+            )
+
+            # DDIM: std should be zero for deterministic sampling
+            if self.use_ddim:
+                std = torch.zeros_like(mean)
+            else:
+                # DDPM: make deterministic by zeroing std at final step; otherwise use clipped std
+                if t == 0 or deterministic:
+                    std = torch.zeros_like(mean)
+                else:
+                    std = torch.exp(0.5 * logvar).clamp_(min=1e-3)
+
+            # Use zero noise for determinism; if std is zero, noise term is ignored
+            noise = torch.zeros_like(x)
+            x = mean + std * noise
+
+            # Clamp only at the final step if configured
+            if self.final_action_clip_value is not None and i == len(t_all) - 1:
+                x = torch.clamp(
+                    x, -self.final_action_clip_value, self.final_action_clip_value
+                )
+
+        return x
 

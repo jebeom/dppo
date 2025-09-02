@@ -88,6 +88,18 @@ class DiffusionModel(nn.Module):
         logging.info(
             f"Number of network parameters: {sum(p.numel() for p in self.parameters())}"
         )
+        
+        # Compile the network for RTX 5090 optimization
+        # torch.compile is much faster than torch.jit.trace on RTX 5090
+        compile_enabled = kwargs.get("torch_compile", True)  # Default to enabled
+        if compile_enabled:
+            try:
+                self.network = torch.compile(self.network, mode="reduce-overhead")
+                logging.info("Successfully compiled diffusion network with torch.compile")
+            except Exception as e:
+                logging.warning(f"Failed to compile network, continuing without compilation: {e}")
+        else:
+            logging.info("torch.compile disabled via configuration")
 
         """
         DDPM parameters

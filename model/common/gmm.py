@@ -37,7 +37,7 @@ class GMMModel(torch.nn.Module):
         )
         
         # Compile the network for RTX 5090 optimization  
-        compile_enabled = kwargs.get("torch_compile", True)  # Default to enabled
+        compile_enabled = kwargs.get("torch_compile", False)  # Default to enabled
         if compile_enabled:
             try:
                 self.network = torch.compile(self.network, mode="reduce-overhead")

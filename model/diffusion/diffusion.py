@@ -91,7 +91,7 @@ class DiffusionModel(nn.Module):
         
         # Compile the network for RTX 5090 optimization
         # torch.compile is much faster than torch.jit.trace on RTX 5090
-        compile_enabled = kwargs.get("torch_compile", True)  # Default to enabled
+        compile_enabled = kwargs.get("torch_compile", False)  # Default to enabled
         if compile_enabled:
             try:
                 self.network = torch.compile(self.network, mode="reduce-overhead")

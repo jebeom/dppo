@@ -44,6 +44,7 @@ robomimic = [
     "d4rl",
     "patchelf",
     "robomimic==0.3.0",
+    "mujoco==3.3.7",
     "robosuite @ git+https://github.com/ARISE-Initiative/robosuite.git@v1.4.1",
 ]
 d3il = [
